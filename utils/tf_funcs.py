@@ -1,17 +1,28 @@
 import tensorflow as tf
+import numpy as np
+from sklearn.metrics import precision_score, recall_score, f1_score
 
 
 def get_weight_varible(name, shape):
     return tf.get_variable(name, initializer=tf.random_uniform(shape, -0.01, 0.01))
 
 
-def softmax_by_length(inputs, length):
+def getmask(length, max_len, out_shape):
     '''
+    length shape:[batch_size]
+    '''
+    ret = tf.cast(tf.sequence_mask(length, max_len), tf.float32)
+    return tf.reshape(ret, out_shape)
+
+
+def softmax_by_length(inputs, length):
+    """
     input shape:[batch_size, 1, max_len]
     length shape:[batch_size]
     return shape:[batch_size, 1, max_len]
-    '''
+    """
     inputs = tf.exp(tf.cast(inputs, tf.float32))
+    inputs *= getmask(length, tf.shape(inputs)[2], tf.shape(inputs))
     _sum = tf.reduce_sum(inputs, reduction_indices=2, keepdims=True) + 1e-9
     return inputs / _sum
 
@@ -46,7 +57,6 @@ def LSTM(inputs, sequence_length, n_hidden, scope):
 
 
 def CNNnet(inputs, sequence_length, embedding_size, num_class, filter_sizes, num_filters, keep_prob, l2_reg_lambda):
-
     pooled_outputs = []
     for i, filter_size in enumerate(filter_sizes):
         with tf.name_scope('conv-maxpool-%s' % filter_size):
@@ -85,14 +95,42 @@ def CNNnet(inputs, sequence_length, embedding_size, num_class, filter_sizes, num
 
 
 def att_var(inputs, length, w1, b1, w2):
-    '''
+    """
     input shape:[batch_size, max_len, n_hidden]
     length shape:[batch_size]
     return shape:[batch_size, n_hidden]
-    '''
-    max_len, n_hidden = (tf.shape(inputs)[1], tf.shape(inputs)[2])
+    """
+    max_len, n_hidden = (inputs.shape[1], inputs.shape[2])
     tmp = tf.reshape(inputs, [-1, n_hidden])
     u = tf.tanh(tf.matmul(tmp, w1) + b1)
     alpha = tf.reshape(tf.matmul(u, w2), [-1, 1, max_len])
     alpha = softmax_by_length(alpha, length)
     return tf.reshape(tf.matmul(alpha, inputs), [-1, n_hidden])
+
+
+
+
+def batch_index(length, batch_size, test=False):
+    """
+    用于生成minibatch训练数据
+    """
+    index = np.arange(length)
+    if not test: np.random.shuffle(index)
+    for i in range(int((length + batch_size - 1) / batch_size)):
+        ret = index[i * batch_size: (i + 1) * batch_size]
+        if not test and len(ret) < batch_size: break
+        yield ret
+
+
+def acc_prf(pred_y, true_y, doc_len, average='binary'):
+    tmp1, tmp2 = [], []
+    for i in range(pred_y.shape[0]):
+        for j in range(doc_len[i]):
+            tmp1.append(pred_y[i][j])
+            tmp2.append(true_y[i][j])
+    y_pred, y_true = np.array(tmp1), np.array(tmp2)
+    acc = precision_score(y_true, y_pred, average='micro')
+    p = precision_score(y_true, y_pred, average=average)
+    r = recall_score(y_true, y_pred, average=average)
+    f1 = f1_score(y_true, y_pred, average=average)
+    return acc, p, r, f1
